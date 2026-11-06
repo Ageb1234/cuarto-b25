@@ -189,6 +189,13 @@ line.dim { stroke: var(--chalk); stroke-width: 1.2; }
 .arch span { color: var(--muted); font-size: 0.93rem; }
 .nota { font-size: 0.9rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; }
 
+.btn.entrar { border-color: var(--brick); color: var(--brick); }
+.lbl-entrar { align-self: center; font-weight: 700; padding-right: 4px; }
+.paseo { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: flex; gap: 6px; align-items: center;
+  background: rgba(20,20,22,.72); padding: 6px; border-radius: 99px; z-index: 2; }
+.paseo button { width: 46px; height: 46px; border-radius: 50%; border: 0; background: #fff; color: #111; font: 700 1.15rem/1 var(--f-body); cursor: pointer; }
+.paseo .salir { width: auto; padding: 0 16px; border-radius: 99px; background: var(--brick); color: #fff; font-size: 0.95rem; }
+.visor.dentro .estado { top: 12px; bottom: auto; }
 dialog { border: 0; padding: 0; background: transparent; max-width: 96vw; max-height: 94vh; }
 dialog::backdrop { background: rgba(10,10,12,.86); }
 dialog img { max-width: 96vw; max-height: 88vh; display: block; border-radius: 8px; }
@@ -340,11 +347,18 @@ dialog button { position: fixed; top: calc(12px + env(safe-area-inset-top, 0px))
   <div class="head">
     <span class="eyebrow">Maqueta 3D</span>
     <h2 id="t-3d">Gírala con el dedo</h2>
-    <p>Arrastra para girar, pellizca o usa la rueda para acercar. Quita los techos para ver por dentro.</p>
+    <p>Arrastra para girar, pellizca o usa la rueda para acercar. Con <b>Entrar a</b> recorres por dentro la casa y el cuarto nuevo, a la altura de los ojos.</p>
   </div>
   <div class="visor" id="visor">
     <img class="poster" data-a="img/10_maqueta_seccionada.jpg" alt="Maqueta sin techo de la casa y el cuarto" width="1600" height="900">
     <span class="estado" id="estado3d">Cargando maqueta 3D…</span>
+    <div class="paseo" id="paseo" hidden role="group" aria-label="Caminar por dentro">
+      <button type="button" id="p-izq" aria-label="Girar a la izquierda">↶</button>
+      <button type="button" id="p-adelante" aria-label="Avanzar">▲</button>
+      <button type="button" id="p-atras" aria-label="Retroceder">▼</button>
+      <button type="button" id="p-der" aria-label="Girar a la derecha">↷</button>
+      <button type="button" id="p-salir" class="salir">Salir</button>
+    </div>
   </div>
   <div class="controles" role="group" aria-label="Controles de la maqueta">
     <button class="btn" id="b-techo" type="button" aria-pressed="false">Quitar techos</button>
@@ -354,6 +368,15 @@ dialog button { position: fixed; top: calc(12px + env(safe-area-inset-top, 0px))
     <button class="btn vista" data-vista="aerea" type="button">Vista aérea</button>
     <button class="btn vista" data-vista="pasaje" type="button">En el pasaje</button>
     <button class="btn vista" data-vista="arriba" type="button">Desde arriba</button>
+  </div>
+  <div class="controles" role="group" aria-label="Entrar a la casa">
+    <span class="lbl-entrar">Entrar a:</span>
+    <button class="btn entrar" data-cuarto="cuarto" type="button">Cuarto nuevo</button>
+    <button class="btn entrar" data-cuarto="bano" type="button">Baño nuevo</button>
+    <button class="btn entrar" data-cuarto="sala" type="button">Sala-comedor</button>
+    <button class="btn entrar" data-cuarto="d1" type="button">Dormitorio 1</button>
+    <button class="btn entrar" data-cuarto="d2" type="button">Dormitorio 2</button>
+    <button class="btn entrar" data-cuarto="cocina" type="button">Cocina</button>
   </div>
 </section>
 
@@ -528,7 +551,7 @@ document.querySelectorAll("img[data-a]").forEach(i => { i.src = A(i.dataset.a); 
   // ---------- maqueta 3D (three.js)
   const visor = document.getElementById('visor'), estado = document.getElementById('estado3d');
   const grupos = {};
-  let iniciado = false, camera, controls, renderer, scene, animar = null;
+  let iniciado = false, camera, controls, renderer, scene, animar = null, hemi = null, modoDentro = false, luzOjo = null;
   const VISTAS = {   // Blender (x, y, z) -> three (x, z, -y)
     aerea: { pos: [18.5, 9.6, -11.0], tgt: [4.0, 0.6, -5.7] },
     pasaje: { pos: [7.05, 1.6, -6.25], tgt: [4.45, 1.35, -7.45] },
@@ -539,6 +562,66 @@ document.querySelectorAll("img[data-a]").forEach(i => { i.src = A(i.dataset.a); 
     const v = VISTAS[n]; camera.position.set(...v.pos); controls.target.set(...v.tgt); controls.update();
     if (n === 'arriba' && !estadoBtn.techo) toggle('techo');
   }
+  // ---- recorrido por dentro (Blender x, y -> three x, -z); ojos a 1.65 m
+  const EYE = 1.65;
+  const CUARTOS = {
+    cuarto: { p: [4.15, 7.95], t: [1.5, 6.7], n: 'Cuarto nuevo' },
+    bano: { p: [1.36, 7.78], t: [0.2, 6.55], n: 'Baño nuevo' },
+    sala: { p: [6.85, 3.35], t: [3.0, 4.9], n: 'Sala-comedor' },
+    d1: { p: [5.15, 2.45], t: [7.2, 0.9], n: 'Dormitorio 1' },
+    d2: { p: [2.05, 3.25], t: [0.5, 4.9], n: 'Dormitorio 2' },
+    cocina: { p: [2.95, 2.55], t: [1.3, 1.2], n: 'Cocina' },
+  };
+  const paseo = document.getElementById('paseo');
+  function entrar(k) {
+    iniciar(); if (!camera) return;
+    const c = CUARTOS[k];
+    if (!modoDentro) {
+      modoDentro = true; visor.classList.add('dentro');
+      camera.fov = 72; camera.updateProjectionMatrix();
+      Object.assign(controls, { enableZoom: false, enablePan: false, rotateSpeed: 0.45, minDistance: 0.01, maxDistance: 1,
+                                minPolarAngle: Math.PI * 0.28, maxPolarAngle: Math.PI * 0.72 });
+      luzOjo = new THREE.PointLight(0xfff0dc, 0.75, 9); camera.add(luzOjo); scene.add(camera);
+      if (hemi) hemi.intensity = 1.2;
+      paseo.hidden = false;
+    }
+    ['techo', 'casa', 'antes'].forEach(b => { estadoBtn[b] = false; document.getElementById('b-' + b).setAttribute('aria-pressed', false); });
+    aplicar();
+    const dx = c.t[0] - c.p[0], dz = -(c.t[1] - c.p[1]), L = Math.hypot(dx, dz);
+    camera.position.set(c.p[0], EYE, -c.p[1]);
+    controls.target.set(c.p[0] + dx / L * 0.1, EYE - 0.03, -c.p[1] + dz / L * 0.1); controls.update();
+    estado.hidden = false; estado.textContent = c.n + ' · arrastra para mirar alrededor';
+  }
+  function salir() {
+    if (!modoDentro) return;
+    modoDentro = false; visor.classList.remove('dentro'); paseo.hidden = true;
+    camera.fov = 38; camera.updateProjectionMatrix();
+    Object.assign(controls, { enableZoom: true, enablePan: true, rotateSpeed: 1, minDistance: 2, maxDistance: 60, minPolarAngle: 0, maxPolarAngle: Math.PI * 0.495 });
+    if (luzOjo) { camera.remove(luzOjo); luzOjo = null; }
+    if (hemi) hemi.intensity = 0.85;
+    estado.hidden = true; vista('aerea');
+  }
+  function caminar(paso) {
+    const d = new THREE.Vector3().subVectors(controls.target, camera.position); d.y = 0; d.normalize().multiplyScalar(paso);
+    camera.position.add(d); controls.target.add(d); controls.update();
+  }
+  function girar(a) {
+    const off = new THREE.Vector3().subVectors(controls.target, camera.position);
+    off.applyAxisAngle(new THREE.Vector3(0, 1, 0), a); controls.target.copy(camera.position).add(off); controls.update();
+  }
+  document.querySelectorAll('[data-cuarto]').forEach(b => b.addEventListener('click', () => entrar(b.dataset.cuarto)));
+  document.getElementById('p-adelante').addEventListener('click', () => caminar(0.45));
+  document.getElementById('p-atras').addEventListener('click', () => caminar(-0.45));
+  document.getElementById('p-izq').addEventListener('click', () => girar(0.35));
+  document.getElementById('p-der').addEventListener('click', () => girar(-0.35));
+  document.getElementById('p-salir').addEventListener('click', salir);
+  window.addEventListener('keydown', e => {
+    if (!modoDentro || e.target.closest('input')) return;
+    const k = e.key.toLowerCase(), acc = { arrowup: () => caminar(0.35), w: () => caminar(0.35), arrowdown: () => caminar(-0.35), s: () => caminar(-0.35),
+      arrowleft: () => girar(0.2), a: () => girar(0.2), arrowright: () => girar(-0.2), d: () => girar(-0.2), escape: salir }[k];
+    if (acc) { e.preventDefault(); acc(); }
+  });
+
   const estadoBtn = { techo: false, casa: false, antes: false };
   function aplicar() {
     const vis = g => {
@@ -555,7 +638,7 @@ document.querySelectorAll("img[data-a]").forEach(i => { i.src = A(i.dataset.a); 
     aplicar();
   }
   ['techo', 'casa', 'antes'].forEach(k => document.getElementById('b-' + k).addEventListener('click', () => toggle(k)));
-  document.querySelectorAll('[data-vista]').forEach(b => b.addEventListener('click', () => { iniciar(); setTimeout(() => vista(b.dataset.vista), iniciado && camera ? 0 : 400); }));
+  document.querySelectorAll('[data-vista]').forEach(b => b.addEventListener('click', () => { salir(); iniciar(); setTimeout(() => vista(b.dataset.vista), iniciado && camera ? 0 : 400); }));
 
   function iniciar() {
     if (iniciado) return; iniciado = true;
@@ -570,7 +653,7 @@ document.querySelectorAll("img[data-a]").forEach(i => { i.src = A(i.dataset.a); 
     camera = new THREE.PerspectiveCamera(38, 1, 0.1, 400);
     controls = new THREE.OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true; controls.maxPolarAngle = Math.PI * 0.495; controls.minDistance = 2; controls.maxDistance = 60;
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x7f8d68, 0.85));
+    hemi = new THREE.HemisphereLight(0xffffff, 0x7f8d68, 0.85); scene.add(hemi);
     const sol = new THREE.DirectionalLight(0xfff1df, 1.25); sol.position.set(14, 22, 9); sol.castShadow = true;
     sol.shadow.mapSize.set(2048, 2048); Object.assign(sol.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, near: 1, far: 70 });
     sol.target.position.set(5, 0, -5); scene.add(sol, sol.target);
@@ -591,6 +674,11 @@ document.querySelectorAll("img[data-a]").forEach(i => { i.src = A(i.dataset.a); 
         let p = o, g = null; while (p && !g) { g = p.userData && p.userData.grupo; p = p.parent; }
         (grupos[g || 'otros'] = grupos[g || 'otros'] || []).push(o);
         if (o.material && o.material.transparent) o.castShadow = false;
+        (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
+          if (!m || m.metalness === undefined) return;
+          if (/espejo/i.test(m.name)) { m.color.set(0xc3cdd4); m.metalness = 0.1; m.roughness = 0.12; }
+          else if (m.metalness > 0.5) { m.metalness = 0.35; m.roughness = Math.max(m.roughness, 0.3); }
+        });
       });
       scene.add(gltf.scene); aplicar();
       visor.querySelector('.poster').hidden = true; estado.textContent = 'Arrastra para girar';
@@ -600,6 +688,8 @@ document.querySelectorAll("img[data-a]").forEach(i => { i.src = A(i.dataset.a); 
     const loop = () => { animar = requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); };
     loop();
   }
+  const hashCuarto = (location.hash.match(/^#entrar-(\w+)$/) || [])[1];
+  if (hashCuarto && CUARTOS[hashCuarto]) { visor.scrollIntoView(); iniciar(); entrar(hashCuarto); }
   if ('IntersectionObserver' in window) {
     const io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { iniciar(); io.disconnect(); } }, { rootMargin: '300px' });
     io.observe(visor);
